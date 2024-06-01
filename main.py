@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import FastAPI, Response
 from httpx import AsyncClient
 
-from utils import create_solved_dict, boj_rating_to_lv, get_starting_day, get_tomorrow, get_tier_name
+from utils import create_grass, boj_rating_to_lv, get_starting_day, get_tomorrow, get_tier_name
 from randoms import random_user, random_timestamp
 import mapping
 
@@ -56,36 +56,29 @@ def make_heatmap_svg(handle: str, tier: str, solved_dict: dict, color_theme: dic
   idx = 0
   today, now_in_loop = get_starting_day()
 
+  print(solved_dict)
   while True:
-      # solved.ac streak specs:
-      # n := clamp (solved_max) to [4, 50]
-      # [0, 0], [1, 0.1n), [0.1n, 0.3n), [0.3n, 0.6n), [0.6n, 1.0n] -- all values are rounded up
-      if not solved_dict.get(now_in_loop):
-          color = color_theme[tier_name][0]
-      elif (solved_dict[now_in_loop]) >= ((solved_max * 6 + 9) // 10):
-          color = color_theme[tier_name][4]
-      elif (solved_dict[now_in_loop]) >= ((solved_max * 3 + 9) // 10):
-          color = color_theme[tier_name][3]
-      elif (solved_dict[now_in_loop]) >= ((solved_max * 1 + 9) // 10) and (solved_dict[now_in_loop]) > 1:
-          color = color_theme[tier_name][2]
-      else:
-          color = color_theme[tier_name][1]
-      
-      nemo = '\n<rect class="zandi"\
-              width="15" height="15" rx="4"\
-              transform="translate({x} {y})" \
-              fill="{color}"\
-              style="animation-delay:{delay}ms"/>\
-              '.format(x=23 + (idx // 7) * 17,
-                        y=44 + (idx % 7) * 16,
-                      color=color,
-                      delay=500 + (idx % 7) * 50 + idx * 4)
-      svg += nemo
-      idx += 1
+    if (now_in_loop in solved_dict):
+      pr_tier = get_tier_name(solved_dict[now_in_loop]['tier']).split(' ')[0];
+      color = color_theme[pr_tier][1]
+    else:
+      color = color_theme['Unknown'][0]
+    
+    nemo = '\n<rect class="zandi"\
+            width="15" height="15" rx="4"\
+            transform="translate({x} {y})" \
+            fill="{color}"\
+            style="animation-delay:{delay}ms"/>\
+            '.format(x=23 + (idx // 7) * 17,
+                    y=44 + (idx % 7) * 16,
+                    color=color,
+                    delay=500 + (idx % 7) * 50 + idx * 4)
+    svg += nemo
+    idx += 1
 
-      if now_in_loop == today:
-          break
-      now_in_loop = get_tomorrow(now_in_loop)
+    if now_in_loop == today:
+        break
+    now_in_loop = get_tomorrow(now_in_loop)
   
   svg += """
       </g>
@@ -94,31 +87,35 @@ def make_heatmap_svg(handle: str, tier: str, solved_dict: dict, color_theme: dic
   return svg
 
 @app.get("/api")
-async def generate_bedge(handle: str, theme: Optional[str] = "warm"):
+async def generate_bedge(handle: str, theme: Optional[str] = "light"):
     api = 'https://solved.ac/api/v3/user'
     user_info_url = api + '/show?handle=' + handle
-    timestamp_url = api + '/history?handle=' + handle + '&topic=solvedCount'
+    tier_url = api + '/grass?handle=' + handle + '&topic=today-solved-max-tier'
+    solved_url = api + '/grass?handle=' + handle + '&topic=today-solved'
     solved_dict = {}
     # 테마 색상표 (기본값: WARM)
-    theme = theme if theme.upper() in mapping.THEMES else 'warm'
+    theme = theme if theme.upper() in mapping.THEMES else 'light'
     color_theme = mapping.THEMES[theme.upper()]
     
     async with AsyncClient() as client:
         user_info = await client.get(user_info_url)
-        timestamp = await client.get(timestamp_url)
+        tier = await client.get(tier_url)
+        solved = await client.get(solved_url)
         
-    if user_info.status_code == 200 and timestamp.status_code == 200:
+    if user_info.status_code == 200 and tier.status_code == 200 and solved.status_code == 200:
         user_info = user_info.json()
-        timestamp = timestamp.json()
+        tier = tier.json()
+        solved = solved.json()
         
-        print(timestamp)
-        solved_dict = create_solved_dict(timestamp)
+        solved_dict = create_grass(tier, solved)
         
         rating = user_info['rating']
         tier = mapping.TIERS[boj_rating_to_lv(rating)]
     else:
         user_info = {'handle': handle, 'rating': 0, 'solved': 0}
         tier = 'Unknown'
+
+    print(solved_dict)
     
     svg = make_heatmap_svg(handle, tier, solved_dict, color_theme)
     
@@ -134,7 +131,7 @@ async def generate_random_badge(
   theme: Optional[str] = "warm"):
   user = random_user(tier)
   handle = user['handle']
-  solved_dict = create_solved_dict(random_timestamp())
+  solved_dict = create_grass(random_timestamp())
   theme = theme if theme.upper() in mapping.THEMES else 'warm'
   color_theme = mapping.THEMES[theme.upper()]
 
